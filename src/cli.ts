@@ -104,6 +104,21 @@ type StudioOptions = {
   model?: string;
 };
 
+type OpenAIResponse = {
+  ok: boolean;
+  status: number;
+  payload: unknown;
+};
+
+type OpenAIErrorPayload = {
+  error?: {
+    message?: string;
+    type?: string;
+    code?: string;
+    param?: string | null;
+  };
+};
+
 type MenuItem<T extends string> = {
   label: string;
   value: T;
@@ -297,6 +312,16 @@ program
       const signals = await resolveSignals();
       headline("SIGNAL EXPLANATION");
       printSignalExplanation(getSignal(signals, signalName));
+    });
+  });
+
+program
+  .command("test-ai")
+  .option("--model <model>", "model to test; defaults to OPENAI_MODEL")
+  .description("Test OpenAI key loading, model visibility, and one minimal generation request.")
+  .action(async (options: { model?: string }) => {
+    await failHandled(async () => {
+      await testAIConnection(options.model || process.env.OPENAI_MODEL || "gpt-5.5");
     });
   });
 
@@ -515,9 +540,10 @@ async function runStudio(options: StudioOptions) {
           { shortcut: "7", label: "Replay run", value: "replay" },
           { shortcut: "8", label: "Metrics", value: "metrics" },
           { shortcut: "9", label: "Signal catalog", value: "catalog" },
-          { label: "Explain signal", value: "explain" },
-          { label: "Toggle live/offline", value: "mode" },
-          { label: "Set live model", value: "model" },
+          { shortcut: "10", label: "Test AI connection", value: "test-ai" },
+          { shortcut: "11", label: "Explain signal", value: "explain" },
+          { shortcut: "12", label: "Toggle live/offline", value: "mode" },
+          { shortcut: "13", label: "Set live model", value: "model" },
           { shortcut: "0", label: "Exit", value: "exit" },
         ],
         { cancelValue: "exit" },
@@ -550,6 +576,9 @@ async function runStudio(options: StudioOptions) {
           break;
         case "catalog":
           await studioCatalog(rl);
+          break;
+        case "test-ai":
+          await studioTestAIConnection(rl, state);
           break;
         case "explain":
           await studioExplain(rl);
@@ -646,6 +675,15 @@ async function studioRunAgent(
       console.log("");
       console.log(failure("No agent decision was made. Toggle offline mode to run the deterministic simulation."));
     }
+  });
+}
+
+async function studioTestAIConnection(
+  rl: Interface,
+  state: { model: string },
+) {
+  await studioAction(rl, async () => {
+    await testAIConnection(state.model);
   });
 }
 
@@ -1048,6 +1086,120 @@ async function replayRecord(
     console.log("");
     printOutcomeMetrics(record.result);
   }
+}
+
+async function testAIConnection(model: string) {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  headline("AI CONNECTION TEST");
+  console.log(`Model: ${model}`);
+
+  if (!apiKey) {
+    console.log(failure("OPENAI_API_KEY is not configured."));
+    console.log(muted("Add it to .env.local, then rerun this test."));
+    return;
+  }
+
+  console.log(`Key:   ${describeOpenAIKey(apiKey)}`);
+  console.log("");
+
+  const modelsSpinner = ora("Checking OpenAI authentication and model list").start();
+  const modelsResponse = await callOpenAI("/models", apiKey);
+
+  if (!modelsResponse.ok) {
+    modelsSpinner.fail("OpenAI authentication/model-list request failed");
+    printOpenAIResponseFailure(modelsResponse);
+    return;
+  }
+
+  modelsSpinner.succeed("OpenAI authentication works");
+  const modelIds = extractModelIds(modelsResponse.payload);
+  if (modelIds.includes(model)) {
+    console.log(success(`Model visible: ${model}`));
+  } else {
+    console.log(warning(`Model not present in /v1/models: ${model}`));
+    console.log(muted("The generation request will still be attempted, because model lists can lag entitlement changes."));
+  }
+
+  const generationSpinner = ora(`Sending minimal generation request to ${model}`).start();
+  const generationResponse = await callOpenAI("/responses", apiKey, {
+    method: "POST",
+    body: JSON.stringify({
+      model,
+      input: "Return exactly OK.",
+    }),
+  });
+
+  if (!generationResponse.ok) {
+    generationSpinner.fail("OpenAI generation request failed");
+    printOpenAIResponseFailure(generationResponse);
+    const errorPayload = generationResponse.payload as OpenAIErrorPayload;
+    if (errorPayload.error?.code === "insufficient_quota") {
+      console.log("");
+      console.log(warning("Diagnosis: the key is valid, but this project/org has no usable generation quota."));
+    }
+    return;
+  }
+
+  generationSpinner.succeed("OpenAI generation request works");
+  console.log(success("Live AI connection is ready for the LangChain agent."));
+}
+
+async function callOpenAI(
+  pathName: string,
+  apiKey: string,
+  init: RequestInit = {},
+): Promise<OpenAIResponse> {
+  const response = await fetch(`https://api.openai.com/v1${pathName}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      ...init.headers,
+    },
+  });
+  const text = await response.text();
+  let payload: unknown = text;
+  try {
+    payload = JSON.parse(text) as unknown;
+  } catch {
+    payload = text.slice(0, 800);
+  }
+  return {
+    ok: response.ok,
+    status: response.status,
+    payload,
+  };
+}
+
+function describeOpenAIKey(apiKey: string) {
+  if (apiKey.length <= 12) return "configured";
+  return `${apiKey.slice(0, 7)}...${apiKey.slice(-4)}`;
+}
+
+function extractModelIds(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") return [];
+  const data = (payload as { data?: unknown }).data;
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const id = (item as { id?: unknown }).id;
+      return typeof id === "string" ? id : null;
+    })
+    .filter((id): id is string => Boolean(id));
+}
+
+function printOpenAIResponseFailure(response: OpenAIResponse) {
+  console.log(failure(`Status: ${response.status}`));
+  const errorPayload = response.payload as OpenAIErrorPayload;
+  if (errorPayload.error) {
+    if (errorPayload.error.type) console.log(`Type:   ${errorPayload.error.type}`);
+    if (errorPayload.error.code) console.log(`Code:   ${errorPayload.error.code}`);
+    if (errorPayload.error.message) console.log(`Detail: ${errorPayload.error.message}`);
+    return;
+  }
+  console.log(typeof response.payload === "string" ? response.payload : JSON.stringify(response.payload, null, 2));
 }
 
 async function pauseStep(options: DemoOptions) {
