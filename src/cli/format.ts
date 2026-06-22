@@ -140,7 +140,7 @@ export function printAgentConsumers(consumers: AgentSignalConsumer[]) {
   for (const consumer of consumers) {
     const signals = consumer.signals.length
       ? consumer.signals.join(", ")
-      : muted("no source signals");
+      : muted("no governed signal");
     console.log(`- ${chalk.bold(consumer.agent)}: ${signals}`);
   }
 }

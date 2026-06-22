@@ -33,7 +33,12 @@ import {
 } from "@/lib/cases";
 import { getAgentSignalConsumers } from "@/lib/signalConsumers";
 import { getSignalTone, type SignalTone } from "@/lib/signalDisplay";
-import { calculateSignals, getSignal, getSourceSignals } from "@/lib/signals";
+import {
+  calculateSignals,
+  getDecisionSignals,
+  getSignal,
+  getSourceSignals,
+} from "@/lib/signals";
 import type {
   AgentMemory,
   AgentRunResult,
@@ -175,12 +180,6 @@ function shortTime(timestamp: string): string {
 
 function boolLabel(value: boolean): string {
   return value ? "Yes" : "No";
-}
-
-function formatSignalFactor(factor: Signal["factors"][number]) {
-  if (factor.score === undefined) return factor.name;
-  const sign = factor.score >= 0 ? "+" : "";
-  return `${factor.name} (${sign}${factor.score})`;
 }
 
 function metricLabel(value: boolean) {
@@ -678,8 +677,9 @@ function SystemsStage({ playerCase }: { playerCase: PlayerCase }) {
 }
 
 function SignalStage({ signals }: { signals: Signal[] }) {
-  const sourceSignals = getSourceSignals(signals);
-  const bonusEligibility = getSignal(sourceSignals, "Bonus Eligibility Signal");
+  const decisionSignals = getDecisionSignals(signals);
+  const supportingSignals = getSourceSignals(signals);
+  const bonusEligibility = getSignal(decisionSignals, "Bonus Eligibility Signal");
 
   return (
     <div className="min-w-0 space-y-4">
@@ -713,41 +713,23 @@ function SignalStage({ signals }: { signals: Signal[] }) {
           </div>
         </div>
       </Panel>
-      <div className="grid gap-3 lg:grid-cols-3">
-        {sourceSignals.map((signal, index) => (
-          <div className={`rounded-lg border p-4 ${signalToneStyles[getSignalTone(signal)]}`} key={signal.name}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-base font-semibold">{index + 1}. {signal.name}</p>
-              </div>
-              <p className="shrink-0 text-xs font-semibold uppercase tracking-[0.14em] opacity-75">
-                {signal.severity} ({signal.score})
-              </p>
-            </div>
-
-            <div className="mt-4 border-t border-current/15 pt-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] opacity-70">
-                Factors
-              </p>
-              <ul className="mt-2 space-y-1.5">
-                {signal.factors.map((factor) => (
-                  <li className="flex gap-2 text-xs leading-5" key={`${signal.name}-${factor.name}`}>
-                    <span className="font-semibold">✓</span>
-                    <span>{formatSignalFactor(factor)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="mt-3 border-t border-current/15 pt-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] opacity-70">
-                Reason
-              </p>
-              <p className="mt-1 text-xs leading-5 opacity-85">{signal.explanation.join(" ")}</p>
-            </div>
+      <Panel title="Supporting deterministic checks" eyebrow="Internal inputs" icon={<Sparkles size={18} />}>
+        <div className="rounded-lg border border-stone-200 bg-stone-50 p-5">
+          <p className="text-sm leading-6 text-stone-700">
+            These supporting checks remain deterministic and auditable, but they are internal inputs to the primary agent-facing signal rather than peer outputs passed to the agent.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {supportingSignals.map((signal) => (
+              <span
+                className="rounded border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700"
+                key={signal.name}
+              >
+                {signal.name}
+              </span>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      </Panel>
     </div>
   );
 }
@@ -799,7 +781,6 @@ function AgentStage({
   runElapsedSeconds: number;
   error: string | null;
 }) {
-  const sourceSignals = getSourceSignals(signals);
   const activeRunningStep = Math.min(
     langChainRuntimeSteps.length - 1,
     Math.floor(runElapsedSeconds / 4),
@@ -812,7 +793,7 @@ function AgentStage({
       icon={<Activity size={18} />}
     >
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <AgentConsumerMap signals={sourceSignals} />
+        <AgentConsumerMap signals={signals} />
         <div className="rounded-lg border border-stone-200 bg-white p-5">
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">
             LangChain boundary
@@ -1220,7 +1201,7 @@ export function SignalOpsPresentation() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           case: cloneCase(playerCase),
-          signals: getSourceSignals(signals),
+          signals: getDecisionSignals(signals),
           memory,
         }),
       });

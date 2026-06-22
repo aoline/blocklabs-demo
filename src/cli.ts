@@ -23,7 +23,12 @@ import {
 import { runBonusResolutionAgent } from "./lib/agent";
 import { runLangChainBonusResolutionAgent } from "./lib/langchainAgent";
 import { getAgentSignalConsumers } from "./lib/signalConsumers";
-import { calculateSignals, getSignal, getSourceSignals } from "./lib/signals";
+import {
+  calculateSignals,
+  getDecisionSignals,
+  getSignal,
+  getSourceSignals,
+} from "./lib/signals";
 import type { PlayerCase, Signal } from "./lib/types";
 import {
   failure,
@@ -184,7 +189,7 @@ program
 
       headline("SIGNAL LAYER");
       printSignalLayerExplainer();
-      printSignals(getSourceSignals(signals));
+      printPrimarySignalView(signals);
       console.log("");
       console.log(success("Signals saved for the current player type."));
     });
@@ -299,6 +304,10 @@ program
     await failHandled(async () => {
       const signals = await resolveSignals();
       headline("SIGNAL CATALOG");
+      console.log("Primary decision signal");
+      printCatalog(getDecisionSignals(signals));
+      console.log("");
+      console.log("Supporting deterministic checks");
       printCatalog(getSourceSignals(signals));
     });
   });
@@ -380,10 +389,10 @@ async function executeRun(playerCase: PlayerCase, options: RunOptions): Promise<
     ).start();
 
   try {
-    const sourceSignals = getSourceSignals(signals);
+    const decisionSignals = getDecisionSignals(signals);
     const result = options.offline
-      ? runBonusResolutionAgent({ case: playerCase, signals: sourceSignals, memory })
-      : await runLangChainBonusResolutionAgent({ case: playerCase, signals: sourceSignals, memory });
+      ? runBonusResolutionAgent({ case: playerCase, signals: decisionSignals, memory })
+      : await runLangChainBonusResolutionAgent({ case: playerCase, signals: decisionSignals, memory });
 
     spinner?.succeed(mode === "live" ? "LangChain + OpenAI run completed" : "Offline simulation completed");
     await saveMemory(result);
@@ -465,7 +474,7 @@ async function runDemoFlow(preset: string, options: DemoOptions): Promise<CliRun
   console.log(`Reason:  ${bonusEligibility.explanation.join(" ")}`);
   console.log("");
   printSignalLayerExplainer();
-  printSignals(getSourceSignals(signals));
+  printPrimarySignalView(signals);
   await pauseStep(options);
 
   stage(5, "Which LangChain AI agents can use these signals?");
@@ -655,7 +664,7 @@ async function studioSignals(rl: Interface) {
     await saveCurrentSignals(signals);
     headline("SIGNAL LAYER");
     printSignalLayerExplainer();
-    printSignals(getSourceSignals(signals));
+    printPrimarySignalView(signals);
   });
 }
 
@@ -721,6 +730,10 @@ async function studioCatalog(rl: Interface) {
   await studioAction(rl, async () => {
     const signals = await resolveSignals();
     headline("SIGNAL CATALOG");
+    console.log("Primary decision signal");
+    printCatalog(getDecisionSignals(signals));
+    console.log("");
+    console.log("Supporting deterministic checks");
     printCatalog(getSourceSignals(signals));
   });
 }
@@ -793,12 +806,12 @@ async function chooseDepositAmount(rl: Interface, currentAmount: number): Promis
 }
 
 async function chooseSignal(rl: Interface, signals: Signal[]): Promise<string | null> {
-  const sourceSignals = getSourceSignals(signals);
+  const availableSignals = [...getDecisionSignals(signals), ...getSourceSignals(signals)];
   const choice = await selectMenu(
     rl,
     ["Choose a signal"],
     [
-      ...sourceSignals.map((signal, index) => ({
+      ...availableSignals.map((signal, index) => ({
         shortcut: String(index + 1),
         label: signal.name,
         value: signal.name,
@@ -1055,6 +1068,20 @@ function printSignalLayerExplainer() {
   console.log("");
 }
 
+function printPrimarySignalView(signals: Signal[]) {
+  printSignals(getDecisionSignals(signals));
+  const supportingSignals = getSourceSignals(signals);
+  if (supportingSignals.length === 0) {
+    return;
+  }
+
+  console.log("");
+  console.log(muted("Supporting deterministic checks were computed internally before this decision signal:"));
+  supportingSignals.forEach((signal) => {
+    console.log(muted(`- ${signal.name}`));
+  });
+}
+
 async function replayRecord(
   record: CliRunRecord,
   options: ReplayOptions = {},
@@ -1065,7 +1092,7 @@ async function replayRecord(
 
   stage(2, "Deterministic signals were calculated");
   printSignalLayerExplainer();
-  printSignals(getSourceSignals(record.signals));
+  printPrimarySignalView(record.signals);
 
   stage(3, "Agent execution");
   if (record.result) {

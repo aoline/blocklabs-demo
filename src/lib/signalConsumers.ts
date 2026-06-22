@@ -1,4 +1,4 @@
-import { getSourceSignals } from "./signals";
+import { getDecisionSignals } from "./signals";
 import type { Signal } from "./types";
 
 export const primarySignalConsumers = [
@@ -16,11 +16,11 @@ export type AgentSignalConsumer = {
 };
 
 export function getAgentSignalConsumers(signals: Signal[]): AgentSignalConsumer[] {
-  const sourceSignals = getSourceSignals(signals);
+  const decisionSignals = getDecisionSignals(signals);
 
   return primarySignalConsumers.map((agent) => ({
     agent,
-    signals: sourceSignals
+    signals: decisionSignals
       .filter((signal) => signal.usedBy.includes(agent))
       .map((signal) => signal.name),
   }));

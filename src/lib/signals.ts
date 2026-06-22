@@ -13,6 +13,8 @@ const severityRank: Record<SignalSeverity, number> = {
   critical: 4,
 };
 
+const decisionSignalNames = new Set<string>(["Bonus Eligibility Signal"]);
+
 function severityFromScore(score: number): SignalSeverity {
   if (score >= 80) return "critical";
   if (score >= 60) return "high";
@@ -65,16 +67,16 @@ export function isAtLeast(
   return severityRank[signal.severity] >= severityRank[severity];
 }
 
-export function isDecisionSignal(): boolean {
-  return false;
+export function isDecisionSignal(signal: Signal): boolean {
+  return decisionSignalNames.has(signal.name);
 }
 
 export function getSourceSignals(signals: Signal[]): Signal[] {
-  return signals;
+  return signals.filter((signal) => !isDecisionSignal(signal));
 }
 
-export function getDecisionSignals(): Signal[] {
-  return [];
+export function getDecisionSignals(signals: Signal[]): Signal[] {
+  return signals.filter(isDecisionSignal);
 }
 
 export function getSignal(signals: Signal[], name: string): Signal {
@@ -468,18 +470,20 @@ export function calculateSignals(playerCase: PlayerCase): Signal[] {
 }
 
 export function calculateSourceSignals(playerCase: PlayerCase): Signal[] {
-  return calculateSignals(playerCase);
+  return getSourceSignals(calculateSignals(playerCase));
 }
 
 export function ensureDecisionSignals(
   playerCase: PlayerCase,
   signals: Signal[],
 ): Signal[] {
-  if (signals.some((signal) => signal.name === "Bonus Eligibility Signal")) {
-    return signals;
+  const availableSignals = signals.length ? signals : calculateSignals(playerCase);
+  const decisionSignals = getDecisionSignals(availableSignals);
+  if (decisionSignals.length > 0) {
+    return decisionSignals;
   }
 
-  const sourceSignals = signals.length ? signals : calculateSignals(playerCase);
+  const sourceSignals = getSourceSignals(availableSignals);
   const identityConfidence = getSignal(sourceSignals, "Identity Confidence");
   const underageRisk = getSignal(sourceSignals, "Underage Risk");
   const fraudRisk = getSignal(sourceSignals, "Fraud Risk");
@@ -487,7 +491,6 @@ export function ensureDecisionSignals(
   const playerValue = getSignal(sourceSignals, "Player Value");
 
   return [
-    ...sourceSignals,
     calculateBonusEligibilitySignal(
       playerCase,
       identityConfidence,
